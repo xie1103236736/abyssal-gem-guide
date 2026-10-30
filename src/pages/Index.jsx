@@ -1,6 +1,19 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { filterCompanions, buildLineup, data as generalsData } from "@/utils/recommend.js";
-import weaponTraits from "../data/weaponTraits.json";
+
+// ===== 数据按需加载（不打入首屏 JS 包，加快国内首次打开）=====
+// recommend.js 与 weaponTraits.json 体积大，改为异步动态 import：
+// 首屏先渲染 UI 框架，数据就绪后自动填充
+let recommendModule = null; // { data, filterCompanions, buildLineup }
+let weaponTraits = {};      // 武器特性表，加载后原地填充
+
+const loadAppData = () =>
+  Promise.all([
+    import("@/utils/recommend.js"),
+    import("../data/weaponTraits.json"),
+  ]).then(([rec, wt]) => {
+    recommendModule = rec;
+    Object.assign(weaponTraits, wt.default);
+  });
 
 // ===================== 配色常量 =====================
 const COLORS = {
@@ -386,7 +399,22 @@ const Index = () => {
   const [breakthrough, setBreakthrough] = useState("突破前");
   const dropdownRef = useRef(null);
 
-  const allNames = useMemo(() => getUniqueGeneralNames(generalsData), []);
+  // 数据异步加载状态：loading -> ready / error
+  const [dataState, setDataState] = useState("loading");
+  useEffect(() => {
+    let alive = true;
+    loadAppData()
+      .then(() => { if (alive) setDataState("ready"); })
+      .catch(() => { if (alive) setDataState("error"); });
+    return () => { alive = false; };
+  }, []);
+
+  // 数据就绪前先以空数据渲染，就绪后自动刷新（变量名与原实现保持一致）
+  const generalsData = recommendModule ? recommendModule.data : [];
+  const filterCompanions = recommendModule ? recommendModule.filterCompanions : () => null;
+  const buildLineup = recommendModule ? recommendModule.buildLineup : () => null;
+
+  const allNames = useMemo(() => getUniqueGeneralNames(generalsData), [dataState]);
 
   const filteredNames = useMemo(() => {
     if (!searchText.trim()) return allNames;
@@ -397,19 +425,19 @@ const Index = () => {
   const selectedGeneral = useMemo(() => {
     if (!selectedName) return null;
     return generalsData.find(g => g.name === selectedName && g.breakthrough === breakthrough) || null;
-  }, [selectedName, breakthrough]);
+  }, [selectedName, breakthrough, dataState]);
 
   // 过滤结果
   const groups = useMemo(() => {
     if (!selectedName) return null;
     return filterCompanions(selectedName, breakthrough);
-  }, [selectedName, breakthrough]);
+  }, [selectedName, breakthrough, dataState]);
 
   const totalCount = groups ? groups.attack.length + groups.shield_break.length + groups.functional.length : 0;
 
   // 阵容推荐
-  const lineupAfter  = useMemo(() => selectedName ? buildLineup(selectedName, breakthrough, true)  : null, [selectedName, breakthrough]);
-  const lineupBefore = useMemo(() => selectedName ? buildLineup(selectedName, breakthrough, false) : null, [selectedName, breakthrough]);
+  const lineupAfter  = useMemo(() => selectedName ? buildLineup(selectedName, breakthrough, true)  : null, [selectedName, breakthrough, dataState]);
+  const lineupBefore = useMemo(() => selectedName ? buildLineup(selectedName, breakthrough, false) : null, [selectedName, breakthrough, dataState]);
   const [lineupTab, setLineupTab] = useState(true); // true=突破后，false=突破前
 
   // 点击外部关闭下拉
@@ -471,7 +499,39 @@ const Index = () => {
           <p style={{ fontSize: 13, color: COLORS.subtext, margin: "6px 0 0" }}>
             效果文本匹配 · 按类型分组展示所有可用随行
           </p>
-          {generalsData.length === 0 && (
+          {dataState === "loading" && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "6px 14px",
+                background: "rgba(52,152,219,0.1)",
+                border: "1px solid rgba(52,152,219,0.3)",
+                borderRadius: 6,
+                fontSize: 12,
+                color: COLORS.shield_break,
+                display: "inline-block",
+              }}
+            >
+              ⏳ 武将数据加载中，请稍候…
+            </div>
+          )}
+          {dataState === "error" && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "6px 14px",
+                background: "rgba(241,196,15,0.1)",
+                border: "1px solid rgba(241,196,15,0.3)",
+                borderRadius: 6,
+                fontSize: 12,
+                color: COLORS.tagHighlight,
+                display: "inline-block",
+              }}
+            >
+              ⚠ 数据加载失败，请刷新重试
+            </div>
+          )}
+          {dataState === "ready" && generalsData.length === 0 && (
             <div
               style={{
                 marginTop: 10,
